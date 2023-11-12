@@ -9,7 +9,7 @@ class Decoder(nn.Module):
                  decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
         super().__init__()
-
+        self.num_patches = num_patches
         self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
@@ -23,10 +23,11 @@ class Decoder(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size ** 2 * in_chans, bias=True)  # decoder to patch
+        self.initialize_weights()
 
     def initialize_weights(self):
-        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1],
-                                                    int(self.patch_embed.num_patches ** .5), cls_token=True)
+        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.num_patches ** .5),
+                                                    cls_token=True)
         self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
 
         torch.nn.init.normal_(self.mask_token, std=.02)
@@ -57,7 +58,9 @@ class Decoder(nn.Module):
         x = x + self.decoder_pos_embed
 
         # apply Transformer blocks
-        for blk in self.decoder_blocks:
+        x_mid = self.decoder_blocks[0](x)
+        x = x_mid
+        for blk in self.decoder_blocks[1:]:
             x = blk(x)
         x = self.decoder_norm(x)
 
@@ -67,22 +70,12 @@ class Decoder(nn.Module):
         # remove cls token
         x = x[:, 1:, :]
 
-        return x
+        return x, x_mid
 
 
-class CycleMAE(nn.Module):
-    """ Masked Autoencoder with VisionTransformer backbone
-    """
-
-    def __init__(self, num_domains=3, img_size=224, patch_size=16, in_chans=3,
-                 embed_dim=1024, depth=24, num_heads=16,
-                 decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
+class Encoder(nn.Module):
+    def __init__(self, img_size, patch_size, in_chans, embed_dim, depth, num_heads, mlp_ratio, norm_layer):
         super().__init__()
-
-        self.num_domains = num_domains
-        # --------------------------------------------------------------------------
-        # MAE encoder specifics
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
 
@@ -94,6 +87,82 @@ class CycleMAE(nn.Module):
             Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
+
+    def forward(self, x, mask_ratio):
+        # embed patches
+        x = self.patch_embed(x)
+
+        # add pos embed w/o cls token
+        x = x + self.pos_embed[:, 1:, :]
+
+        # masking: length -> length * mask_ratio
+        x, mask, ids_restore = self.random_masking(x, mask_ratio)
+
+        # append cls token
+        cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+
+        # apply Transformer blocks
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+
+        return x, mask, ids_restore
+
+    def random_masking(self, x, mask_ratio):
+        """
+        Perform per-sample random masking by per-sample shuffling.
+        Per-sample shuffling is done by argsort random noise.
+        x: [N, L, D], sequence
+        """
+        N, L, D = x.shape  # batch, length, dim
+        len_keep = int(L * (1 - mask_ratio))
+
+        noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+
+        # sort noise for each sample
+        ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+        ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+        # keep the first subset
+        ids_keep = ids_shuffle[:, :len_keep]
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+
+        # generate the binary mask: 0 is keep, 1 is remove
+        mask = torch.ones([N, L], device=x.device)
+        mask[:, :len_keep] = 0
+        # unshuffle to get the binary mask
+        mask = torch.gather(mask, dim=1, index=ids_restore)
+
+        return x_masked, mask, ids_restore
+
+
+class CycleMAE(nn.Module):
+    """ Masked Autoencoder with VisionTransformer backbone
+    """
+
+    def __init__(self, num_domains=3, img_size=224, patch_size=16, in_chans=3,
+                 embed_dim=1024, depth=24, num_heads=16,
+                 decoder_embed_dim=1024, decoder_depth=8, decoder_num_heads=16,
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
+        super().__init__()
+
+        self.num_domains = num_domains
+        self.encoder = Encoder(img_size, patch_size, in_chans, embed_dim, depth, num_heads, mlp_ratio, norm_layer)
+        # --------------------------------------------------------------------------
+        # MAE encoder specifics
+        # self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        num_patches = self.encoder.patch_embed.num_patches
+
+        # self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        # fixed sin-cos embedding
+        # self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)
+
+        # self.blocks = nn.ModuleList([
+        #     Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True, qk_scale=None, norm_layer=norm_layer)
+        #     for i in range(depth)])
+        # self.norm = norm_layer(embed_dim)
 
         # -----------Decoder------------
         multi_domain_decoders_dict = {}
@@ -134,23 +203,24 @@ class CycleMAE(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
+        d = torch.load('./mae_pretrain_vit_large.pth')
+        self.encoder.load_state_dict(d['model'])
         # initialization
         # initialize (and freeze) pos_embed by sin-cos embedding
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.patch_embed.num_patches ** .5),
-                                            cls_token=True)
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        # pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
+        # self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
-        # decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
+        # # decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
 
-        # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
-        w = self.patch_embed.proj.weight.data
-        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        # # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
+        # w = self.patch_embed.proj.weight.data
+        # torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
-        # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
-        torch.nn.init.normal_(self.cls_token, std=.02)
+        # # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
+        # torch.nn.init.normal_(self.cls_token, std=.02)
 
-        # initialize nn.Linear and nn.LayerNorm
-        self.apply(self._init_weights)
+        # # initialize nn.Linear and nn.LayerNorm
+        # self.apply(self._init_weights)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -162,39 +232,40 @@ class CycleMAE(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def random_masking(self, x, mask_ratio):
-        """
-        Perform per-sample random masking by per-sample shuffling.
-        Per-sample shuffling is done by argsort random noise.
-        x: [N, L, D], sequence
-        """
-        N, L, D = x.shape  # batch, length, dim
-        len_keep = int(L * (1 - mask_ratio))
+            # def random_masking(self, x, mask_ratio):
 
-        noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+    #     """
+    #     Perform per-sample random masking by per-sample shuffling.
+    #     Per-sample shuffling is done by argsort random noise.
+    #     x: [N, L, D], sequence
+    #     """
+    #     N, L, D = x.shape  # batch, length, dim
+    #     len_keep = int(L * (1 - mask_ratio))
 
-        # sort noise for each sample
-        ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
-        ids_restore = torch.argsort(ids_shuffle, dim=1)
+    #     noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
 
-        # keep the first subset
-        ids_keep = ids_shuffle[:, :len_keep]
-        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+    #     # sort noise for each sample
+    #     ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+    #     ids_restore = torch.argsort(ids_shuffle, dim=1)
 
-        # generate the binary mask: 0 is keep, 1 is remove
-        mask = torch.ones([N, L], device=x.device)
-        mask[:, :len_keep] = 0
-        # unshuffle to get the binary mask
-        mask = torch.gather(mask, dim=1, index=ids_restore)
+    #     # keep the first subset
+    #     ids_keep = ids_shuffle[:, :len_keep]
+    #     x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
 
-        return x_masked, mask, ids_restore
+    #     # generate the binary mask: 0 is keep, 1 is remove
+    #     mask = torch.ones([N, L], device=x.device)
+    #     mask[:, :len_keep] = 0
+    #     # unshuffle to get the binary mask
+    #     mask = torch.gather(mask, dim=1, index=ids_restore)
+
+    #     return x_masked, mask, ids_restore
 
     def patchify(self, imgs):
         """
         imgs: (N, 3, H, W)
         x: (N, L, patch_size**2 *3)
         """
-        p = self.patch_embed.patch_size[0]
+        p = self.encoder.patch_embed.patch_size[0]
         assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
 
         h = w = imgs.shape[2] // p
@@ -208,7 +279,7 @@ class CycleMAE(nn.Module):
         x: (N, L, patch_size**2 *3)
         imgs: (N, 3, H, W)
         """
-        p = self.patch_embed.patch_size[0]
+        p = self.encoder.patch_embed.patch_size[0]
         h = w = int(x.shape[1] ** .5)
         assert h * w == x.shape[1]
 
@@ -221,7 +292,7 @@ class CycleMAE(nn.Module):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
-        mask: [N, L], 0 is keep, 1 is remove, 
+        mask: [N, L], 0 is keep, 1 is remove,
         """
         target = self.patchify(imgs)
         if self.norm_pix_loss:
@@ -233,62 +304,83 @@ class CycleMAE(nn.Module):
         loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
         return loss
         # loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
-        # return loss     
+        # return loss
 
-    def forward_encoder(self, x, mask_ratio):
-        # embed patches
-        x = self.patch_embed(x)
+    # def forward_encoder(self, x, mask_ratio):
+    # # embed patches
+    # x = self.patch_embed(x)
 
-        # add pos embed w/o cls token
-        x = x + self.pos_embed[:, 1:, :]
+    # # add pos embed w/o cls token
+    # x = x + self.pos_embed[:, 1:, :]
 
-        # masking: length -> length * mask_ratio
-        x, mask, ids_restore = self.random_masking(x, mask_ratio)
+    # # masking: length -> length * mask_ratio
+    # x, mask, ids_restore = self.random_masking(x, mask_ratio)
 
-        # append cls token
-        cls_token = self.cls_token + self.pos_embed[:, :1, :]
-        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+    # # append cls token
+    # cls_token = self.cls_token + self.pos_embed[:, :1, :]
+    # cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+    # x = torch.cat((cls_tokens, x), dim=1)
 
-        # apply Transformer blocks
-        for blk in self.blocks:
-            x = blk(x)
-        x = self.norm(x)
+    # # apply Transformer blocks
+    # for blk in self.blocks:
+    #     x = blk(x)
+    # x = self.norm(x)
 
-        return x, mask, ids_restore
+    # return x, mask, ids_restore
 
-    def forward(self, x, mask_ratio=0.75):
-        latent, mask, ids_restore = self.forward_encoder(x, mask_ratio)
-        loss_list = []
+    def forward(self, x, original_x, mask_ratio=0.75):
+        # latent, mask, ids_restore = self.forward_encoder(x, mask_ratio)
+        latent, mask, ids_restore = self.encoder(x, mask_ratio)
+        loss_recons_list = []
         pred_list = []
 
         for i in range(3):
-            pred = self.multi_domain_decoders[f'decoder_{i}'](latent, ids_restore)
-            loss = self.forward_loss(x, pred, mask)
+            pred, _ = self.multi_domain_decoders[f'decoder_{i}'](latent, ids_restore)
+            # loss = self.forward_loss(x, pred, mask)
+            loss_recons = self.forward_loss(original_x, pred, mask)
             pred_list.append(pred)
-            loss_list.append(loss)
+            loss_recons_list.append(loss_recons)
 
-        # 得到最终的loss(标量)
+        # 计算重建loss(标量)
 
-        bz = int(loss_list[0].shape[0] / 3)
-        loss_list_useful = []
+        bz = int(loss_recons_list[0].shape[0] / 3)
+        loss_recons_list_useful = []
         for i in range(3):
-            loss_list_useful.append(loss_list[i][i * 16:(i + 1) * 16])
+            loss_recons_list_useful.append(loss_recons_list[i][i * bz:(i + 1) * bz])
 
-        loss = (torch.cat(loss_list_useful) * mask).sum() / mask.sum()
+        loss_recons = (torch.cat(loss_recons_list_useful) * mask).sum() / mask.sum()
 
-        return loss, pred_list, mask
+        # 计算cycle loss
+        # cycle_pred_list = []
+        loss_cycle = 0
 
-        # pred0 = self.decoder_0(latent, ids_restore)
-        # loss0 = self.forward_loss(x, pred0, mask)
+        decoder_mid_feature_list = [[] for _ in range(3)]
+        for i in range(3):
+            loss_cycle_list = []
+            # latent, mask, ids_restore = self.forward_encoder(self.unpatchify(pred_list[i].detach()), mask_ratio)
+            latent, mask, ids_restore = self.encoder(self.unpatchify(pred_list[i].detach()), mask_ratio)
 
-        # pred1 = self.decoder_0(latent, ids_restore)
-        # loss1 = self.forward_loss(x, pred1, mask)
+            for j in range(3):
+                pred, decoder_mid_feature = self.multi_domain_decoders[f'decoder_{j}'](latent, ids_restore)
+                loss_cycle_tmp = self.forward_loss(original_x[j * bz:(j + 1) * bz], pred[j * bz:(j + 1) * bz],
+                                                   mask[j * bz:(j + 1) * bz])
+                loss_cycle_list.append(loss_cycle_tmp)
+                decoder_mid_feature_list[j].append(decoder_mid_feature)
 
-        # pred2 = self.decoder_0(latent, ids_restore)
-        # loss2 = self.forward_loss(x, pred2, mask)
-        # for i in range(self.num_domains):
+            loss_cycle += (torch.cat(loss_cycle_list) * mask).sum() / mask.sum()
 
-        # pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
-        # loss = self.forward_loss(x, pred, mask)
-        # return loss, pred, mask
+        # 计算contrastive loss
+        tao = 100000
+        loss_contrastive = 0
+        for i in range(3):
+            decoder_mid_feature = torch.stack(decoder_mid_feature_list[i])
+            new_shape = torch.Size([3, 3, -1]) + decoder_mid_feature.shape[-2:]
+            decoder_mid_feature = decoder_mid_feature.reshape(new_shape)
+            decoder_mid_feature = decoder_mid_feature.permute(1, 0, 2, 3, 4)
+            decoder_mid_feature = decoder_mid_feature.flatten(1, 2)
+
+            loss_contrastive += (-1) * torch.nn.functional.log_softmax(
+                (decoder_mid_feature[i] * decoder_mid_feature).reshape(3, -1).sum(1) / tao, dim=0)[i]
+
+        loss = loss_recons + 2 * loss_cycle + 2 * loss_contrastive
+        return loss

@@ -1,6 +1,7 @@
 """
 DomainNet数据读取
 """
+
 import os
 from pathlib import Path
 import random
@@ -61,7 +62,8 @@ class DomainNet(Dataset):
         #     max_length_domain_img_name_list += sorted(os.listdir(Path(self.data_path) / max_length_domain / cls_name))
 
     def __getitem__(self, index):
-        image_list = []
+        original_image_list = []
+        mix_image_list = []
         label_list = []
         aux_lambda = 0.3
 
@@ -105,12 +107,15 @@ class DomainNet(Dataset):
                 mixup_img = mixup_img + mixup_weight * img_after_aux
 
             mixup_img = mixup_img.astype(np.uint8)
-            image_list.append(mixup_img)
+            original_image_list.append(main_img_resize)
+            mix_image_list.append(mixup_img)
             label_list.append(main_img_label)
 
         image_tensor_list = []
+        original_img_tensor_list = []
 
-        for image in image_list:
+        for idx, image in enumerate(mix_image_list):
+            # 对混合后的图像预处理
             # BGR转RGB
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             # 转为Tensor
@@ -119,15 +124,18 @@ class DomainNet(Dataset):
             image_tensor = normalize(image_tensor, IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)
             image_tensor_list.append(image_tensor)
 
-        return image_tensor_list, label_list
-        # return image_set, label_set
+            # 对原图预处理
+            original_image_rgb = cv2.cvtColor(original_image_list[idx], cv2.COLOR_BGR2RGB)
+            original_image_tensor = to_tensor(original_image_rgb)
+            original_image_tensor = normalize(original_image_tensor, IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD)
+            original_img_tensor_list.append(original_image_tensor)
+
+        return image_tensor_list, original_img_tensor_list, label_list
 
     def __len__(self):
         return self.length
 
 
 if __name__ == '__main__':
-    dataset = DomainNet('D:LargeData/DomainNet/data')
-
-    # dataset[8888]
+    dataset = DomainNet('D:/LargeData/DomainNet/data')
     print('-----')
