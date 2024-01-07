@@ -26,6 +26,7 @@ def main():
     # 1.实例化Dataset
     dataset_path = 'D:/LargeData/DomainNet/data'
     dataset = DomainNet(dataset_path)
+    print('DomainNet就绪...')
 
     # 2.实例化DataLoader
     train_dataloader = DataLoader(dataset=dataset,
@@ -44,15 +45,16 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
 
     # 5.训练模型
+    print('Train 开始...')
     for epoch_idx in range(epoch_num):
         for iter_idx, batch_data in enumerate(train_dataloader):
             lr_sched.adjust_learning_rate(optimizer, iter_idx / len(train_dataloader) + epoch_idx, lr_cfg)
 
             mixed_data = torch.cat(batch_data[0]).cuda()
             original_data = torch.cat(batch_data[1]).cuda()
-            label = []
-            for item in batch_data[1]:
-                label += list(item)
+            # label = []
+            # for item in batch_data[1]:
+            #     label += list(item)
             loss = model(mixed_data, original_data)
             loss_scaler(loss, optimizer, parameters=model.parameters(), update_grad=True)
             optimizer.zero_grad()
