@@ -94,7 +94,7 @@ def main():
 
         # Eval...
         with torch.no_grad():
-            for iter_idx, batch_data in enumerate(train_dataloader):
+            for iter_idx, batch_data in enumerate(test_dataloader):
                 mixed_data = torch.cat(batch_data[0]).cuda()
                 original_data = torch.cat(batch_data[1]).cuda()
                 loss = model(mixed_data, original_data)
