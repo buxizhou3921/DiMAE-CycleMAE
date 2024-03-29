@@ -133,20 +133,21 @@ class DomainNet(Dataset):
 
 
 if __name__ == '__main__':
-    dataset = DomainNet('D:/LargeData/DomainNet/data')
+    dataset = DomainNet('/home/rtx/sda1/kanghaidong/datasets/DomainNet/data')
     # length = dataset.__len__()
     # print('DomainNet dataset length: ', length)
     print('数据加载...')
 
     # image_tensor_list, original_img_tensor_list, label_list = dataset.__getitem__(1)
-    # print('image_tensor_list: ')
-    # print(np.array(image_tensor_list).shape)
-    # print('original_img_tensor_list: ')
-    # print(np.array(original_img_tensor_list).shape)
+    # image_array = torch.stack(image_tensor_list, dim=0).numpy()
+    # original_img_array = torch.stack(original_img_tensor_list, dim=0).numpy()
+    # print('image_array: ')
+    # print(image_array.shape)
+    # print('original_img_array: ')
+    # print(original_img_array.shape)
     # print('label_list: ')
     # print(label_list)
 
-    # image_array = np.array(image_tensor_list)
     # for i in range(image_array.shape[0]):
     #     current_image = image_array[i]
     #     current_image = np.transpose(current_image, (1, 2, 0))
