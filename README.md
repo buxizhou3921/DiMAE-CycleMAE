@@ -1,5 +1,4 @@
-# Paper-reproduction-CycleMAE
-论文复现：CycleMAE
+# DiMAE-CycleMAE
 
 预训练模型 采用 vit-large
 
