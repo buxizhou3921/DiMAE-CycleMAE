@@ -20,7 +20,8 @@ class DomainNet(Dataset):
                'fork', 'helmet', 'hot_dog', 'laptop', 'mouth',
                'parrot', 'pizza', 'postcard', 'potato', 'rainbow',
                'sink', 'star', 'sun', 'table', 'truck']  # 选择20个类别
-    DOMAIN = ['real', 'painting', 'quickdraw']
+    # DOMAIN = ['real', 'painting', 'quickdraw']
+    DOMAIN = ['real', 'painting', 'sketch']
 
     def __init__(self, dataset_path):
         self.data_path = dataset_path  # 数据集路径
@@ -133,7 +134,7 @@ class DomainNet(Dataset):
 
 
 if __name__ == '__main__':
-    dataset = DomainNet('/home/rtx/sda1/kanghaidong/datasets/DomainNet/data')
+    dataset = DomainNet('./DomainNet/data')
     # length = dataset.__len__()
     # print('DomainNet dataset length: ', length)
     print('数据加载...')

@@ -22,44 +22,41 @@ parser.add_argument('--resume', '-r', action='store_true',
                     help='resume from checkpoint')
 args = parser.parse_args()
 
-# lr = args.lr
-
 
 def main():
-    least_loss = sys.float_info.max
+    least_loss = 10000
 
     # 0.一些超参数
-    batch_size = 2
+    batch_size = 6
     num_workers = 1
     base_lr = 1e-3
 
     lr = base_lr * batch_size / 256
-    epoch_num = 100
+    epoch_num = 1000
     warmup_epochs = 40
     min_lr = 0
-    lr_cfg = EasyDict({'warmup_epochs': warmup_epochs, 'lr': lr, 'min_lr': min_lr})
+    lr_cfg = EasyDict({'warmup_epochs': warmup_epochs, 'lr': lr, 'min_lr': min_lr, 'epochs': epoch_num})
 
     # 1.实例化Dataset
-    dataset_path = '/home/rtx/sda1/kanghaidong/datasets/DomainNet/data'  # './DomainNet/data'
+    dataset_path = './DomainNet/data'  # './DomainNet/data'
     dataset = DomainNet(dataset_path)
 
-    # 1.1 划分训练集和测试集
-    rate = 0.8  # 训练集占比
-    train_size = int(rate * len(dataset))
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    # rate = 0.8
+    # train_size = int(rate * len(dataset))
+    # test_size = len(dataset) - train_size
+    # train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
     # 2.实例化DataLoader
-    train_dataloader = DataLoader(dataset=train_dataset,
+    train_dataloader = DataLoader(dataset=dataset,
                                   batch_size=batch_size,
                                   num_workers=num_workers,
                                   shuffle=True,
                                   drop_last=True)
-    test_dataloader = DataLoader(dataset=test_dataset,
-                                 batch_size=batch_size,
-                                 num_workers=num_workers,
-                                 shuffle=True,
-                                 drop_last=True)
+    # test_dataloader = DataLoader(dataset=test_dataset,
+    #                              batch_size=batch_size,
+    #                              num_workers=num_workers,
+    #                              shuffle=True,
+    #                              drop_last=True)
 
     # 3.实例化模型
     model = CycleMAE()
@@ -93,13 +90,15 @@ def main():
         writer.add_scalar('data/train_loss', loss, epoch_idx)
 
         # Eval...
-        with torch.no_grad():
-            for iter_idx, batch_data in enumerate(test_dataloader):
-                mixed_data = torch.cat(batch_data[0]).cuda()
-                original_data = torch.cat(batch_data[1]).cuda()
-                loss = model(mixed_data, original_data)
-
-        writer.add_scalar("data/test_loss", loss, epoch_idx)
+        # total_test_loss = 0
+        # with torch.no_grad():
+        #     for iter_idx, batch_data in enumerate(test_dataloader):
+        #         mixed_data = torch.cat(batch_data[0]).cuda()
+        #         original_data = torch.cat(batch_data[1]).cuda()
+        #         loss = model(mixed_data, original_data)
+        #         total_test_loss = total_test_loss + loss.item()
+        #
+        # writer.add_scalar("data/test_loss", total_test_loss, epoch_idx)
 
         # Save checkpoint.
         if loss < least_loss:
@@ -113,7 +112,7 @@ def main():
                 'optimizer': optimizer.state_dict(),
             }
             print('Saving..')
-            torch.save(state, './checkpoint/ckpt.pth')
+            torch.save(state, './checkpoint/ckpt1000.pth')
 
     writer.close()  # 执行close立即刷新，否则将每120秒自动刷新
 
