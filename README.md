@@ -1,8 +1,19 @@
 # DiMAE-CycleMAE
 
-### Data preparation
-DomainNet
-数据切分
+### Data Preparation
+- DomainNet
+```
+DiMAE-CycleMAE/DomainNet
+├── data
+│   ├── clipart
+│   ├── infograph
+│   └── painting
+│   └── quickdraw
+│   └── real
+│   └── sketch
+```
+
+### Dataset Split
 ```
 python data_split.py
 ```
@@ -14,3 +25,12 @@ Timm == 0.3.2
 
 backbone: vit-large
 
+### Pretrain 
+```
+python main_cyclemae.py
+```
+
+### Finetune
+```
+python main_finetune.py
+```
