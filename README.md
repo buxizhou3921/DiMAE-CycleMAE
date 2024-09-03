@@ -1,10 +1,16 @@
 # DiMAE-CycleMAE
 
-数据准备 DomainNet
+### Data preparation
+DomainNet
+数据切分
+```
+python data_split.py
+```
 
-预训练模型 采用 vit-large
+### Requirements 
+Pytorch == 1.8.0
 
-Pytorch 采用 1.8.0
+Timm == 0.3.2
 
-Timm 采用 0.3.2
+backbone: vit-large
 
